@@ -1,0 +1,133 @@
+Step-by-Step guide
+
+Steps on the production system
+
+    Connect with the production system
+
+    ssh -o "UserKnownHostsFile /dev/null" -A -J companynameadmin@73.19.20.51 companynameadmin@10.0.1.4
+
+
+    Stop Jira service
+
+    systemctl stop confluence
+
+
+    Backup of PostgreSQL database
+
+    pg_dump --host 127.0.0.1 --username confluencedbuser --dbname confluencedb --file=/tmp/postgres-confluencedb-$(date +"%Y%m%d").sql
+
+
+Steps on the test system
+
+    Connect wit the test system
+
+    ssh -A -J companyname@73.19.20.52 companyname@confluence02.internal.cloudapp.net
+    sudo -E -s
+
+
+    Stop Confluence service
+
+    systemctl stop confluence
+
+
+    Copy database from production server
+
+    scp -o 'ProxyJump companynameadmin@73.19.20.51' -p -r companynameadmin@10.0.1.4:/tmp/postgres-confluencedb-$(date +"%Y%m%d").sql /tmp
+    chown postgres:postgres  /tmp/postgres-confluencedb-$(date +"%Y%m%d").sql
+
+
+    Copy application data from production server
+
+    rsync -n -avz --stats --progress -e 'ssh -A -J companynameadmin@13.93.118.224' --rsync-path="sudo rsync" companynameadmin@10.0.1.4:/var/atlassian/application-data/confluence/ /var/atlassian/application-data/confluence/
+
+
+    rsync -avz --stats --progress -e 'ssh -A -J companynameadmin@13.93.118.224' --rsync-path="sudo rsync" companynameadmin@10.0.1.4:/var/atlassian/application-data/confluence/ /var/atlassian/application-data/confluence/
+
+
+    rsync -avz --stats --progress --delete -e 'ssh -A -J companynameadmin@13.93.118.224' --rsync-path="sudo rsync" companynameadmin@10.0.1.4:/var/atlassian/application-data/confluence/ /var/atlassian/application-data/confluence/
+
+
+    Change permissions
+
+    chown -R confluence:confluence /var/atlassian/application-data/confluence/
+
+
+    Switch to PostgeSQL User
+
+    su - postgres
+
+
+    Remove existing database
+
+    psql --command "DROP DATABASE confluencedb;"
+
+
+    Create empty database
+
+    psql --command "CREATE DATABASE confluencedb WITH OWNER confluencedbuser ENCODING 'UTF8' LC_COLLATE 'en_US.UTF-8' LC_CTYPE 'en_US.UTF-8' TEMPLATE template0 CONNECTION LIMIT=-1;"
+
+
+    Import database backup
+
+    psql --dbname confluencedb --file=/tmp/postgres-confluencedb-$(date +"%Y%m%d").sql
+
+
+    Remove SMTP Server Configuration
+
+    -- SELECT
+    psql --dbname confluencedb --command "SELECT * FROM bandana WHERE bandanakey = 'atlassian.confluence.smtp.mail.accounts';"
+
+    -- DELETE
+    psql --dbname confluencedb --command "DELETE FROM bandana WHERE bandanakey = 'atlassian.confluence.smtp.mail.accounts';"
+
+
+    Change Base URL
+
+    -- SELECT
+    psql --dbname confluencedb --command "SELECT bandana FROM bandana WHERE bandanacontext = '_GLOBAL' AND bandanakey = 'atlassian.confluence.settings';"
+
+    -- UPDATE
+    psql --dbname confluencedb --command "UPDATE bandana SET bandanavalue = REPLACE(bandanavalue, 'https://confluence.companyname.com', 'https://staging-confluence.companyname.com') WHERE bandanacontext = '_GLOBAL' AND bandanakey = 'atlassian.confluence.settings';"
+
+
+    Update Site Title
+
+    -- SELECT
+    psql --dbname confluencedb --command "SELECT bandana FROM bandana WHERE bandanacontext = '_GLOBAL' AND bandanakey = 'atlassian.confluence.settings';"
+
+    -- UPDATE
+    psql --dbname confluencedb --command "UPDATE bandana SET bandanavalue = REPLACE(bandanavalue, 'COMPANY Wiki', 'COMPANY Wiki (Staging)') WHERE bandanacontext = '_GLOBAL' AND bandanakey = 'atlassian.confluence.settings';"
+
+
+    Change Application Links
+
+    -- SELECT
+    psql --dbname confluencedb --command "SELECT * FROM bandana WHERE bandanakey LIKE 'applinks%url';"
+
+    -- UPDATE
+    psql --dbname confluencedb --command "UPDATE bandana SET bandanavalue = REPLACE(bandanavalue, 'https://jira.companyname.com', 'https://staging-jira.companyname.com') WHERE bandanakey LIKE 'applinks%url';"
+
+
+    Update Jira Service User Directory URL
+
+    -- SELECT
+    psql --dbname confluencedb --command "SELECT * FROM cwd_directory_attribute WHERE directory_id = '341406589';"
+
+    -- UPDATE
+    psql --dbname confluencedb --command "UPDATE cwd_directory_attribute SET attribute_value = 'https://staging-jira.companyname.com' WHERE attribute_name = 'crowd.server.url' AND directory_id = '341406589';"
+
+     
+
+    Exiting PostgreSQL User
+
+    exit
+
+
+    Remove old log & caching files
+
+    rm -rf /var/atlassian/application-data/confluence/bundled-plugins/*
+    rm -rf /var/atlassian/application-data/confluence/logs/*
+    rm -rf /var/atlassian/application-data/confluence/plugins-cache/*
+    rm -rf /var/atlassian/application-data/confluence/plugins-osgi-cache/felix/*
+    rm -rf /var/atlassian/application-data/confluence/plugins-temp/*
+    rm -rf /var/atlassian/application-data/confluence/temp/*
